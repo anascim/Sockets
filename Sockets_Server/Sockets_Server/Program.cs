@@ -9,18 +9,20 @@ class MainClass
 {
     public static void Menu()
     {
-        Console.WriteLine("Press 1 to start a Server");
-        Console.WriteLine("Press 2 to start a Client");
-        Console.WriteLine("Press anything else to exit...");
+        Log.Yellow(new string[]{
+                    "Press 1 to start a Server",
+                    "Press 2 to start a Client",
+                    "Press anything else to exit..." });
         char input = Console.ReadKey().KeyChar;
         Console.WriteLine();
         if (input == '1')
         {
-            Console.WriteLine("Inform a host/IP...");
+            Log.Yellow(new string[] { "Inform a host/IP..." });
             string ip = Console.ReadLine();
 
-            Console.WriteLine("Inform a port...");
+            Log.Yellow(new string[] { "Inform a port..." });
             string port = Console.ReadLine();
+
             int nport = 0;
 
             try
@@ -29,12 +31,10 @@ class MainClass
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
-                Console.WriteLine("Exiting the application...");
-                Environment.Exit(0);
+                Log.Red(new string[] { "Exiting the application..." });
             }
 
-            Console.WriteLine("Inform the client capacity...");
+            Log.Yellow(new string[] { "Inform the client capacity..." });
             string capacity = Console.ReadLine();
             uint ncapacity = 0;
 
@@ -44,8 +44,7 @@ class MainClass
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
-                Console.WriteLine("Exiting the application...");
+                Log.Red(new string[] { e.ToString(), "Exiting the application..." });
                 Environment.Exit(0);
             }
 
@@ -53,10 +52,10 @@ class MainClass
         }
         else if (input == '2')
         {
-            Console.WriteLine("Inform a host/IP...");
+            Log.Yellow(new string[] { "Inform a host/IP..." });
             string ip = Console.ReadLine();
 
-            Console.WriteLine("Inform a port...");
+            Log.Yellow(new string[] { "Inform a port..." });
             string port = Console.ReadLine();
             int nport = 0;
 
@@ -66,19 +65,18 @@ class MainClass
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
-                Console.WriteLine("Exiting the application...");
+                Log.Red(new string[] { e.ToString(), "Exiting the application..." });
                 Environment.Exit(0);
             }
 
-            Console.WriteLine("Inform yout name...");
+            Log.Yellow(new string[] { "Inform yout name..." });
             string name = Console.ReadLine();
 
             _ = new Client(ip, nport, name);
         }
         else
         {
-            Console.WriteLine("Exiting Application...");
+            Log.Yellow(new string[] { "Exiting the application..." });
             Environment.Exit(0);
         }
     }
@@ -86,6 +84,29 @@ class MainClass
     public static void Main(string[] args)
     {
         Menu();
+    }
+}
+
+static class Log
+{
+    public static void Yellow(string[] messages)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        foreach (string m in messages)
+        {
+            Console.WriteLine(m);
+        }
+        Console.ResetColor();
+    }
+
+    public static void Red(string[] messages)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        foreach (string m in messages)
+        {
+            Console.WriteLine(m);
+        }
+        Console.ResetColor();
     }
 }
 
@@ -122,10 +143,9 @@ class Server
             socket.Bind(ipEndPoint); // liga o socket a um ip/port, representado pela classe IPEndPoint
             socket.Listen((int)clientsN);
 
-            
-            Console.WriteLine("> WAITING FOR A CONNECTION...");
-            // verificar número de clientes conectados antes do BeginAccept()
-            socket.BeginAccept(AcceptClient, socket); // begins listening threads
+            Log.Yellow(new string[] { "> WAITING FOR A CONNECTION..." });
+
+            socket.BeginAccept(AcceptClient, socket);
 
             // main thread: receive Server input
             while (true)
@@ -134,10 +154,9 @@ class Server
 
                 if (input == "/encerrar")
                 {
+                    SendToAll("/encerrar<EOF>");
                     foreach (Connection client in connections)
                     {
-                        if (client == null) continue;
-                        Send(client.socket, "/encerrar<EOF>");
                         client.socket.Shutdown(SocketShutdown.Both);
                         client.socket.Close();
                     }
@@ -151,9 +170,18 @@ class Server
                 }
                 else if (input.Contains("/desconectar"))
                 {
-                    string temp = input;
-                    temp.Remove(12);
-                    Console.WriteLine("TODO: desconectar cliente: " + temp);
+                    string clientName = input.Remove(0, 12);
+                    foreach (Connection c in connections)
+                    {
+                        if (c.name == clientName)
+                        {
+                            c.Disconnect();
+                            connections.RemoveAt(connections.IndexOf(c));
+                            Log.Yellow(new string[] { $"{clientName} foi desconectado!" });
+                            SendToAll($"{clientName} saiu da conversa.<EOF>");
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -164,9 +192,10 @@ class Server
 
         socket.Shutdown(SocketShutdown.Both);
         socket.Close();
-
+        Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\nPress ENTER to continue...");
         Console.Read();
+        Console.ResetColor();
     }
 
     private void AcceptClient(IAsyncResult ar)
@@ -182,23 +211,41 @@ class Server
         Connection connection = new Connection(CreateGenericName(), handler);
 
         handler.BeginReceive(connection.buffer, 0, connection.buffer.Length, 0, ReceiveCallback, connection);
-
         
         Console.WriteLine("> {0} CONNECTED.", handler.RemoteEndPoint);
         connections.Add(connection);
         socket.BeginAccept(AcceptClient, socket); // continues to listen to other cliets
     }
 
-    private void Send(Socket handler, string message)
+    private void Send(Connection connection, string message)
     {
         byte[] data = Encoding.ASCII.GetBytes(message);
-        handler.BeginSend(data, 0, data.Length, 0, SendCallback, handler);
+        connection.socket.BeginSend(data, 0, data.Length, 0, SendCallback, connection.socket);
     }
 
     private void SendCallback(IAsyncResult ar)
     {
         Socket handler = (Socket)ar.AsyncState;
         int sentData = handler.EndSend(ar);
+    }
+
+    private void SendToAll(string message)
+    {
+        foreach (Connection client in connections)
+        {
+            Send(client, message);
+        }
+    }
+
+    private void SendToAllButOne(Connection exception, string message)
+    {
+        foreach (Connection client in connections)
+        {
+            if (client != exception)
+            {
+                Send(client, message);
+            }
+        }
     }
 
     private void ReceiveCallback(IAsyncResult ar)
@@ -216,7 +263,11 @@ class Server
             {
                 // received the whole client message
                 connection.message = connection.message.Remove(connection.message.Length - 5);
-                Console.WriteLine($"[{connection.name}] {connection.message}");
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.Write($"[{connection.name}]");
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"{connection.message}");
+                Console.ResetColor();
                 string trimmedMsg = connection.message.Trim();
 
                 if (connection.message.Contains("/sair"))
@@ -228,11 +279,13 @@ class Server
                     }
                     Console.WriteLine("> {0} DISCONECTOU.", connection.name);
                     // informa para os outros usuários que o cliente saiu
-                    foreach (Connection client in connections)
-                    {
-                        Send(client.socket, connection.name + " DISCONECTOU.<EOF>");
-                    }
+                    SendToAllButOne(connection, connection.name + " disconectou.<EOF>");
                     connections.Remove(connection);
+                    return;
+                }
+                else if (trimmedMsg.Length == 0)
+                {
+
                 }
                 else if (trimmedMsg[0] == '@')
                 {
@@ -241,8 +294,7 @@ class Server
                 else if (connection.message.Contains("/nome"))
                 {
                     string oldName = connection.name;
-                    string chosenName = connection.message.Remove(0, 5);
-                    chosenName.Trim();
+                    string chosenName = connection.message.Remove(0, 6);
 
                     if (NameIsValid(chosenName))
                     {
@@ -250,32 +302,25 @@ class Server
                     }
                     else
                     {
-                        Send(connection.socket, "Alguem ja possui esse nome<EOF>");
+                        Send(connection, "Alguem ja possui esse nome<EOF>");
                     }
-                    // check if the user is setting its first name
-                    if (connection.name == chosenName)
-                    {
-                        foreach (Connection client in connections)
-                        {
-                            Send(client.socket, connection.name + " entrou no chat!<EOF>");
-                        }
 
-                        connection.nameChosen = true;
+                    if (connection.nameChosen)
+                    {
+                        SendToAllButOne(connection, oldName + " mudou de nome para " + connection.name + "<EOF>");
                     }
                     else
                     {
-                        foreach (Connection client in connections)
-                        {
-                            Send(client.socket, oldName + " mudou de nome para " + connection.name + "<EOF>");
-                        }
+                        // the user is setting its first name
+                        Log.Yellow(new string[] { $"{oldName} entrou na sala como {connection.name}" });
+                        Send(connection, $"##servernewname## {connection.name}<EOF>");
+                        SendToAllButOne(connection, connection.name + " entrou no chat.<EOF>");
+                        connection.nameChosen = true;
                     }
                 }
                 else
                 {
-                    foreach (Connection client in connections)
-                    {
-                        Send(client.socket, connection.name + " " +connection.message + "<EOF>");
-                    }
+                    SendToAllButOne(connection, connection.name + ": " + connection.message + "<EOF>");
                 }
                 connection.message = "";
             }
@@ -341,13 +386,20 @@ class Connection
         this.message = "";
         this.nameChosen = false;
     }
+
+    public void Disconnect()
+    {
+        this.socket.Close();
+        this.socket.Shutdown(SocketShutdown.Both);
+    }
 }
 
 class Client
 {
     string server;
     int port;
-    string name;
+    readonly string initialName;
+    string currentName;
     byte[] buffer;
     string data;
     private static ManualResetEvent connectDone = new ManualResetEvent(false);
@@ -356,13 +408,13 @@ class Client
     {
         this.server = server;
         this.port = port;
-        this.name = name;
+        this.initialName = name;
         this.buffer = new byte[1024];
         this.data = "";
-        StartClient(server, port, name);
+        StartClient(server, port);
     }
 
-    void StartClient(string server, int port, string name)
+    void StartClient(string server, int port)
     {
         IPHostEntry ipHostInfo = Dns.GetHostEntry(Dns.GetHostName());
         IPAddress ipAdress = ipHostInfo.AddressList[0];
@@ -375,23 +427,29 @@ class Client
         {
             socket.BeginConnect(ipEndPoint, ConnectCallback, socket);
             connectDone.WaitOne();
-            Send(socket, "/nome " + this.name + "<EOF>");
+            Send(socket, "/nome " + this.initialName + "<EOF>");
             while (true)
             {
                 // send messages
                 string message = Console.ReadLine();
-                message += "<EOF>";
-                Send(socket, message);
-
+                if (message.Contains("/eu"))
+                {
+                    Console.WriteLine($"Seu nome é: {this.initialName}");
+                    break;
+                }
                 if (message == "/sair")
                 {
                     if (socket.Connected)
                     {
+                        byte[] msg = Encoding.ASCII.GetBytes("/sair<EOF>");
+                        socket.Send(msg);
                         socket.Shutdown(SocketShutdown.Both);
                         socket.Close();
                     }
                     break;
                 }
+                message += "<EOF>";
+                Send(socket, message);
             }
         }
         catch (Exception e)
@@ -430,7 +488,16 @@ class Client
                     client.Close();
                 }
             }
-            Console.WriteLine("[SERVER] {0}", data);
+            else if (data.Contains("##servernewname##"))
+            {
+                data = data.Remove(0, 18);
+                this.currentName = data;
+                Console.WriteLine($"Seu nome agora é: {currentName}");
+            }
+            else
+            {
+                Console.WriteLine(data);
+            }
             data = "";
         }
         client.BeginReceive(buffer, 0, buffer.Length, 0, ReceiveCallback, client);
