@@ -152,37 +152,80 @@ class Server
             {
                 string input = Console.ReadLine();
 
-                if (input == "/encerrar")
+                if (input.StartsWith("/", StringComparison.OrdinalIgnoreCase))
                 {
-                    SendToAll("/encerrar<EOF>");
-                    foreach (Connection client in connections)
+                    if (input == "/encerrar")
                     {
-                        client.socket.Shutdown(SocketShutdown.Both);
-                        client.socket.Close();
-                    }
-                    break;
-                }
-                else if (input == "/clientes")
-                {
-                    foreach (var c in connections) {
-                        Console.WriteLine(c.name);
-                    }
-                }
-                else if (input.Contains("/desconectar"))
-                {
-                    string clientName = input.Remove(0, 12);
-                    foreach (Connection c in connections)
-                    {
-                        if (c.name == clientName)
+                        SendToAll("/encerrar<EOF>");
+                        foreach (Connection client in connections)
                         {
-                            c.Disconnect();
-                            connections.RemoveAt(connections.IndexOf(c));
-                            Log.Yellow(new string[] { $"{clientName} foi desconectado!" });
-                            SendToAll($"{clientName} saiu da conversa.<EOF>");
-                            break;
+                            client.socket.Shutdown(SocketShutdown.Both);
+                            client.socket.Close();
+                        }
+                        break;
+                    }
+                    else if (input == "/clientes")
+                    {
+                        foreach (var c in connections)
+                        {
+                            Console.WriteLine(c.name);
                         }
                     }
+                    else if (input.Contains("/desconectar"))
+                    {
+                        string clientName = input.Remove(0, 13);
+                        bool clientFound = false;
+                        foreach (Connection c in connections)
+                        {
+                            if (c.name == clientName)
+                            {
+                                Send(c, "[SERVER] Você foi desconectado<EOF>");
+                                c.Disconnect();
+                                connections.RemoveAt(connections.IndexOf(c));
+                                Log.Yellow(new string[] { $"{clientName} foi desconectado!" });
+                                clientFound = true;
+                                break;
+                            }
+                        }
+                        if (!clientFound)
+                        {
+                            Log.Red(new string[] { $"Nenhum cliente encontrado com o nome {clientName}." });
+                        }
+                        else
+                        {
+                            SendToAll($"{clientName} saiu da conversa.<EOF>");
+                        }
+                    }
+                    else
+                    {
+                        Log.Red(new string[] { "Comando inexistente." });
+                    }
                 }
+                else if (input.StartsWith("@", StringComparison.OrdinalIgnoreCase))
+                {
+                    string temp = input.Remove(0, 1);
+                    string[] nameAndMsg = temp.Split(new char[] {' '}, 2);
+                    string name = nameAndMsg[0];
+                    string msg = nameAndMsg[1];
+                    bool nameFound = false;
+                    foreach (Connection c in connections)
+                    {
+                        if (c.name == name)
+                        {
+                            Send(c, "[SERVER] " + msg + "<EOF>");
+                            nameFound = true;
+                        }
+                    }
+                    if (!nameFound)
+                    {
+                        Log.Red(new string[] { "Nenhum cliente encontrado com esse nome." });
+                    }
+                }
+                else
+                {
+                    SendToAll("[SERVER] " + input + "<EOF>");
+                }
+                
             }
         }
         catch (Exception e)
@@ -219,7 +262,7 @@ class Server
 
     private void Send(Connection connection, string message)
     {
-        byte[] data = Encoding.ASCII.GetBytes(message);
+        byte[] data = Encoding.UTF8.GetBytes(message);
         connection.socket.BeginSend(data, 0, data.Length, 0, SendCallback, connection.socket);
     }
 
@@ -252,12 +295,19 @@ class Server
     {
         Connection connection = (Connection)ar.AsyncState;
         Socket socket = connection.socket;
-
-        int bytesRead = socket.EndReceive(ar);
+        int bytesRead = 0;
+        try
+        {
+            bytesRead = socket.EndReceive(ar);
+        }
+        catch (Exception e)
+        {
+            Log.Red(new string[] { e.ToString() });
+        }
 
         if (bytesRead > 0)
         {
-            connection.message += Encoding.ASCII.GetString(connection.buffer, 0, bytesRead);
+            connection.message += Encoding.UTF8.GetString(connection.buffer, 0, bytesRead);
 
             if (connection.message.IndexOf("<EOF>") > -1)
             {
@@ -268,69 +318,91 @@ class Server
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine($"{connection.message}");
                 Console.ResetColor();
-                string trimmedMsg = connection.message.Trim();
 
-                if (connection.message.Contains("/sair"))
+                if (connection.message.StartsWith("/", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (connection.socket.Connected)
+                    if (connection.message.StartsWith("/sair", StringComparison.OrdinalIgnoreCase))
                     {
-                        connection.socket.Shutdown(SocketShutdown.Both);
-                        connection.socket.Close();
+                        if (connection.socket.Connected)
+                        {
+                            connection.Disconnect();
+                        }
+                        Console.WriteLine("> {0} DISCONECTOU.", connection.name);
+                        // informa para os outros usuários que o cliente saiu
+                        SendToAllButOne(connection, connection.name + " disconectou.<EOF>");
+                        connections.Remove(connection);
+                        return;
                     }
-                    Console.WriteLine("> {0} DISCONECTOU.", connection.name);
-                    // informa para os outros usuários que o cliente saiu
-                    SendToAllButOne(connection, connection.name + " disconectou.<EOF>");
-                    connections.Remove(connection);
-                    return;
-                }
-                else if (trimmedMsg.Length == 0)
-                {
-
-                }
-                else if (trimmedMsg[0] == '@')
-                {
-                    // direct message
-                }
-                else if (connection.message.Contains("/nome"))
-                {
-                    string oldName = connection.name;
-                    string chosenName = connection.message.Remove(0, 6);
-
-                    if (NameIsValid(chosenName))
+                    else if (connection.message.StartsWith("/quem", StringComparison.OrdinalIgnoreCase))
                     {
-                        connection.name = chosenName;
+                        string message = "";
+                        foreach (Connection c in connections)
+                        {
+                            message += c.name + "\n";
+                        }
+                        Send(connection, message + "<EOF>");
+                    }
+                    else if (connection.message.StartsWith("/nome", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string oldName = connection.name;
+                        string chosenName = connection.message.Remove(0, 6);
+
+                        if (NameIsValid(chosenName))
+                        {
+                            connection.name = chosenName;
+                        }
+                        else
+                        {
+                            Send(connection, "Alguem ja possui esse nome<EOF>");
+                        }
+
+                        if (connection.nameChosen)
+                        {
+                            SendToAllButOne(connection, oldName + " mudou de nome para " + connection.name + "<EOF>");
+                        }
+                        else
+                        {
+                            // the user is setting its first name
+                            Log.Yellow(new string[] { $"{oldName} entrou na sala como {connection.name}" });
+                            Send(connection, $"##servernewname## {connection.name}<EOF>");
+                            SendToAllButOne(connection, connection.name + " entrou no chat.<EOF>");
+                            connection.nameChosen = true;
+                        }
                     }
                     else
                     {
-                        Send(connection, "Alguem ja possui esse nome<EOF>");
-                    }
-
-                    if (connection.nameChosen)
-                    {
-                        SendToAllButOne(connection, oldName + " mudou de nome para " + connection.name + "<EOF>");
-                    }
-                    else
-                    {
-                        // the user is setting its first name
-                        Log.Yellow(new string[] { $"{oldName} entrou na sala como {connection.name}" });
-                        Send(connection, $"##servernewname## {connection.name}<EOF>");
-                        SendToAllButOne(connection, connection.name + " entrou no chat.<EOF>");
-                        connection.nameChosen = true;
+                        Send(connection, "[SERVER] Invalid command!<EOF>");
                     }
                 }
+                else if (connection.message.StartsWith("@", StringComparison.OrdinalIgnoreCase))
+                {
+                    string temp = connection.message.Remove(0, 1);
+                    string[] nameAndMsg = temp.Split(new char[] { ' ' }, 2);
+                    string name = nameAndMsg[0];
+                    string msg = nameAndMsg[1];
+                    bool nameFound = false;
+                    foreach (Connection c in connections)
+                    {
+                        if (c.name == name)
+                        {
+                            Send(c, connection.name + ": " + msg + "<EOF>");
+                            nameFound = true;
+                        }
+                    }
+                    if (!nameFound)
+                    {
+                        Send(connection, "[SERVER] Nenhum cliente encontrado com esse nome.");
+                    }
+                }
+                
                 else
                 {
                     SendToAllButOne(connection, connection.name + ": " + connection.message + "<EOF>");
                 }
                 connection.message = "";
             }
-            else
-            {
-                // a mensagem não foi recebida por completo... receber o restante da mensagem
-                socket.BeginReceive(connection.buffer, 0, connection.buffer.Length, 0, ReceiveCallback, connection);
-            }
+            socket.BeginReceive(connection.buffer, 0, connection.buffer.Length, 0, ReceiveCallback, connection);
         }
-        socket.BeginReceive(connection.buffer, 0, connection.buffer.Length, 0, ReceiveCallback, connection);
     }
 
     bool NameIsValid(string name)
@@ -389,8 +461,8 @@ class Connection
 
     public void Disconnect()
     {
-        this.socket.Close();
         this.socket.Shutdown(SocketShutdown.Both);
+        this.socket.Close();
     }
 }
 
@@ -431,25 +503,27 @@ class Client
             while (true)
             {
                 // send messages
-                string message = Console.ReadLine();
-                if (message.Contains("/eu"))
+                string input = Console.ReadLine();
+                if (input.StartsWith("/eu", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine($"Seu nome é: {this.initialName}");
-                    break;
+                    continue;
                 }
-                if (message == "/sair")
+                if (input.StartsWith("/sair", StringComparison.OrdinalIgnoreCase))
                 {
                     if (socket.Connected)
                     {
-                        byte[] msg = Encoding.ASCII.GetBytes("/sair<EOF>");
+                        byte[] msg = Encoding.UTF8.GetBytes("/sair<EOF>");
                         socket.Send(msg);
                         socket.Shutdown(SocketShutdown.Both);
                         socket.Close();
                     }
                     break;
                 }
-                message += "<EOF>";
-                Send(socket, message);
+                else
+                {
+                    Send(socket, input + "<EOF>");
+                }
             }
         }
         catch (Exception e)
@@ -474,7 +548,7 @@ class Client
     {
         Socket client = (Socket)ar.AsyncState;
         int bytesReceived = client.EndReceive(ar);
-        data += Encoding.ASCII.GetString(buffer, 0, bytesReceived);
+        data += Encoding.UTF8.GetString(buffer, 0, bytesReceived);
 
         if (data.IndexOf("<EOF>") > -1) //EOF: End Of File. Poderia colocar qualquer coisa como final de msg
         {
@@ -505,7 +579,7 @@ class Client
 
     private void Send(Socket client, string message)
     {
-        byte[] data = Encoding.ASCII.GetBytes(message);
+        byte[] data = Encoding.UTF8.GetBytes(message);
         client.BeginSend(data, 0, data.Length, 0, SendCallback, client);
     }
 
